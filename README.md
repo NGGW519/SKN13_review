@@ -1,2 +1,1 @@
-# SKN13_review
-Review now or cry later.
+# Slogan: Review now or cry later.
