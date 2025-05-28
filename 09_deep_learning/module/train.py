@@ -158,7 +158,7 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, epochs, save_best_m
         ############ 1 epoch 학습 종료 후-> LR를 조정 (있으면) ########### 
         if lr_scheduler is not None: 
             current_lr = lr_scheduler.get_last_lr()[0]  # log용
-            lr_scheduler.step()
+            lr_scheduler.step()   ###### lr_scheduler.step(step) 이렇게 두면 step 단위로 lr을 변경한다.
             new_lr = lr_scheduler.get_last_lr()[0] # log용
             if current_lr != new_lr: # LR가 변경되었으면
                 print(f">>>>>>Learning Rate가 {current_lr}에서 {new_lr}로 변경됨<<<<<<")
@@ -201,3 +201,98 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, epochs, save_best_m
     e = time.time()
     print(e-s, "초")
     return train_loss_list, train_accuracy_list, val_loss_list, val_accuracy_list
+
+def train_caws(dataloader, model, loss_fn, optimizer, device="cpu", mode:'binary or multi'='binary', lr_scheduler=None, epoch=None):
+    model.train()
+    size = len(dataloader.dataset)
+    steps_per_epoch = len(dataloader)
+
+    for batch_idx, (X, y) in enumerate(dataloader):
+        X, y = X.to(device), y.to(device)
+        pred = model(X)
+        loss = loss_fn(pred, y)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # 🎯 scheduler를 step 단위로 호출
+        if lr_scheduler is not None and epoch is not None:
+            fractional_epoch = epoch + batch_idx / steps_per_epoch
+            lr_scheduler.step(fractional_epoch)
+
+    # 평가
+    if mode == 'binary':
+        train_loss, train_accuracy = test_binary_classification(dataloader, model, loss_fn, device)
+    else:
+        train_loss, train_accuracy = test_multi_classification(dataloader, model, loss_fn, device)
+    return train_loss, train_accuracy
+
+
+def fit_caws(train_loader, val_loader, model, loss_fn, optimizer, epochs,
+             save_best_model=True, save_model_path=None, early_stopping=True,
+             patience=10, device='cpu', mode="binary", lr_scheduler=None):
+    """
+    CosineAnnealingWarmRestarts를 step 단위로 적용하는 학습 루틴.
+    train_caws()를 내부에서 사용하며, scheduler.step(fractional_epoch)를 step마다 호출함.
+    """
+    train_loss_list = []
+    train_accuracy_list = []
+    val_loss_list = []
+    val_accuracy_list = []
+
+    if save_best_model:
+        best_score_save = torch.inf
+
+    if early_stopping:
+        trigger_count = 0
+        best_score_es = torch.inf
+
+    model = model.to(device)
+    import time
+    s = time.time()
+
+    for epoch in range(epochs):
+        # 🔁 CosineAnnealingWarmRestarts를 step 단위로 적용하는 train_caws() 호출
+        train_loss, train_accuracy = train_caws(
+            train_loader, model, loss_fn, optimizer,
+            device=device, mode=mode,
+            lr_scheduler=lr_scheduler, epoch=epoch
+        )
+
+        # ✅ scheduler.step() 호출 제거됨
+
+        # 검증
+        if mode == "binary":
+            val_loss, val_accuracy = test_binary_classification(val_loader, model, loss_fn, device=device)
+        else:
+            val_loss, val_accuracy = test_multi_classification(val_loader, model, loss_fn, device=device)
+
+        # 로그 및 저장
+        train_loss_list.append(train_loss)
+        train_accuracy_list.append(train_accuracy)
+        val_loss_list.append(val_loss)
+        val_accuracy_list.append(val_accuracy)
+
+        print(f"Epoch[{epoch+1}/{epochs}] - Train loss: {train_loss:.5f} Train Acc: {train_accuracy:.5f} || Val loss: {val_loss:.5f} Val Acc: {val_accuracy:.5f}")
+        print('='*100)
+
+        if save_best_model and val_loss < best_score_save:
+            torch.save(model, save_model_path)
+            print(f"저장: {epoch+1} - 이전: {best_score_save:.5f}, 현재: {val_loss:.5f}")
+            best_score_save = val_loss
+
+        if early_stopping:
+            if val_loss < best_score_es:
+                best_score_es = val_loss
+                trigger_count = 0
+            else:
+                trigger_count += 1
+                if trigger_count >= patience:
+                    print(f"Early stopping: Epoch - {epoch}")
+                    break
+
+    e = time.time()
+    print(e - s, "초")
+    return train_loss_list, train_accuracy_list, val_loss_list, val_accuracy_list
+

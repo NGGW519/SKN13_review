@@ -39,3 +39,5 @@ def load_fashion_mnist_dataset(root_path, batch_size, is_train=True):
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=is_train)  # shuffle: train이면 True, test면 False 할 것이므로 is_train을 넣음.
 
     return dataloader
+
+
